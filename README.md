@@ -1,59 +1,296 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# PHP Application Deployment Guide
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+This repository contains a Dockerized PHP application with automated CI/CD deployment to AWS ECS.
 
-## About Laravel
+## 📋 Table of Contents
+- [Architecture Overview](#architecture-overview)
+- [Environment Configuration](#environment-configuration)
+- [Docker Setup](#docker-setup)
+- [CI/CD Pipeline](#cicd-pipeline)
+- [Deployment](#deployment)
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+---
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+## 🏗️ Architecture Overview
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+### CI/CD Pipeline Architecture
+![CI/CD Pipeline](./docs/images/cicd-pipeline.png)
 
-## Learning Laravel
+Our deployment pipeline consists of:
+1. **GitHub** - Source code repository
+2. **AWS CodePipeline** - Orchestrates the deployment process
+3. **AWS CodeBuild** - Builds Docker images and deploys to ECS
+4. **Amazon ECR** - Stores Docker container images
+5. **Amazon ECS** - Runs containerized PHP application
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework. You can also check out [Laravel Learn](https://laravel.com/learn), where you will be guided through building a modern Laravel application.
+---
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+## ⚙️ Environment Configuration
 
-## Laravel Sponsors
+### Environment-Based Docker Configuration
+![Environment Configuration](./docs/images/environment-config.png)
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+The application supports multiple environments (development, staging, production) with environment-specific configurations:
 
-### Premium Partners
+```bash
+docker build --build-arg ENVIRONMENT=development -t myapp:dev .
+docker build --build-arg ENVIRONMENT=staging -t myapp:staging .
+docker build --build-arg ENVIRONMENT=production -t myapp:prod .
+```
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+### Configuration Structure
+```
+project-root/
+├── etc/
+│   ├── development/
+│   │   ├── custom-php-setting.ini
+│   │   ├── custom-fpm-setting.conf
+│   │   ├── nginx.conf
+│   │   └── supervisor.conf
+│   ├── staging/
+│   │   └── ... (same files)
+│   └── production/
+│       └── ... (same files)
+└── Dockerfile
+```
 
-## Contributing
+---
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+## 🐳 Docker Setup
 
-## Code of Conduct
+### Dockerfile
+The Dockerfile uses environment-specific configuration files:
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+```dockerfile
+FROM php:8.2-fpm-alpine
 
-## Security Vulnerabilities
+# Environment 
+ARG ENVIRONMENT
+ENV ENVIRONMENT=${ENVIRONMENT}
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+# Set working directory
+WORKDIR /var/www/html
 
-## License
+# Install system dependencies + PHP extensions
+RUN apk add --no-cache \
+    nodejs npm \
+    nginx supervisor \
+    libpng-dev libjpeg-turbo-dev libwebp-dev freetype-dev icu-dev \
+    && docker-php-ext-configure gd \
+        --with-freetype \
+        --with-jpeg \
+        --with-webp \
+    && docker-php-ext-install -j$(nproc) \
+        calendar \
+        gd \
+        intl
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+# Install Composer
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+# Copy environment-specific configurations
+RUN cp /usr/local/etc/php/php.ini-production /usr/local/etc/php/php.ini
+COPY ./etc/${ENVIRONMENT}/custom-php-setting.ini /usr/local/etc/php/conf.d/custom-php-setting.ini
+COPY ./etc/${ENVIRONMENT}/custom-fpm-setting.conf /usr/local/etc/php-fpm.d/www.conf
+COPY ./etc/${ENVIRONMENT}/nginx.conf /etc/nginx/nginx.conf
+COPY ./etc/${ENVIRONMENT}/supervisor.conf /etc/supervisor/conf.d/supervisor.conf
+
+# Copy application code
+COPY . .
+
+# Install dependencies
+RUN composer install --no-interaction --prefer-dist --optimize-autoloader
+
+# Cache Laravel configurations
+RUN php artisan config:clear && \
+    php artisan optimize
+
+# Set permissions
+RUN chown -R www-data:www-data /var/www/html && \
+    chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache
+
+# Build frontend assets
+RUN npm install && npm run build && rm -rf node_modules
+
+# Expose port
+EXPOSE 80
+
+# Start supervisord
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisor.conf"]
+```
+
+### Build Commands
+
+**Development:**
+```bash
+docker build --build-arg ENVIRONMENT=development -t myapp:dev .
+docker run -d -p 80:80 --name myapp-dev myapp:dev
+```
+
+**Production:**
+```bash
+docker build --build-arg ENVIRONMENT=production -t myapp:prod .
+docker run -d -p 80:80 --name myapp-prod myapp:prod
+```
+
+---
+
+## 🚀 CI/CD Pipeline
+
+### Pipeline Stages
+
+#### Stage 1: Source (GitHub)
+- Triggered on `git push` to the main branch
+- Pulls latest code from repository
+
+#### Stage 2: Build (CodeBuild)
+CodeBuild performs the following steps:
+1. Pull source code from GitHub
+2. Build Docker image: `docker build -t app .`
+3. Tag image: `docker tag app:latest`
+4. Push image to Amazon ECR
+5. Deploy new task to ECS
+6. Update ECS service
+
+### buildspec.yml
+```yaml
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - echo Logging in to Amazon ECR...
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      - REPOSITORY_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME
+      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - IMAGE_TAG=${COMMIT_HASH:=latest}
+  
+  build:
+    commands:
+      - echo Build started on `date`
+      - echo Building the Docker image...
+      - docker build --build-arg ENVIRONMENT=production -t $REPOSITORY_URI:latest .
+      - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$IMAGE_TAG
+  
+  post_build:
+    commands:
+      - echo Build completed on `date`
+      - echo Pushing the Docker images...
+      - docker push $REPOSITORY_URI:latest
+      - docker push $REPOSITORY_URI:$IMAGE_TAG
+      - echo Writing image definitions file...
+      - printf '[{"name":"php-app","imageUri":"%s"}]' $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
+
+artifacts:
+  files: imagedefinitions.json
+```
+
+---
+
+## 📦 Deployment
+
+### AWS Resources Required
+
+1. **ECR Repository**
+   ```bash
+   aws ecr create-repository --repository-name php-app
+   ```
+
+2. **ECS Cluster**
+   ```bash
+   aws ecs create-cluster --cluster-name php-app-cluster
+   ```
+
+3. **Task Definition**
+   - Container: PHP Application
+   - Image: ECR repository URI
+   - Port: 80
+   - Memory: 512 MB
+   - CPU: 256
+
+4. **ECS Service**
+   - Desired count: 2
+   - Load balancer: Application Load Balancer (optional)
+
+5. **CodePipeline**
+   - Source: GitHub
+   - Build: CodeBuild
+   - Deploy: ECS
+
+### Environment Variables
+Set these in CodeBuild:
+- `AWS_ACCOUNT_ID`: Your AWS account ID
+- `AWS_DEFAULT_REGION`: AWS region (e.g., us-east-1)
+- `IMAGE_REPO_NAME`: ECR repository name
+
+---
+
+## 📸 Adding Images to GitHub README
+
+### Option 1: Store in Repository
+1. Create a `docs/images/` folder in your repository
+2. Add your diagram images (PNG/JPG format)
+3. Reference in README:
+   ```markdown
+   ![CI/CD Pipeline](./docs/images/cicd-pipeline.png)
+   ```
+
+### Option 2: Use GitHub Issues
+1. Create a new issue in your repository
+2. Drag and drop your image
+3. GitHub will generate a URL
+4. Copy the URL and use it in README:
+   ```markdown
+   ![CI/CD Pipeline](https://user-images.githubusercontent.com/...)
+   ```
+
+### Option 3: Use External Hosting
+- Upload to services like Imgur, Cloudinary, or AWS S3
+- Reference the public URL:
+   ```markdown
+   ![CI/CD Pipeline](https://example.com/image.png)
+   ```
+
+---
+
+## 🔧 Local Development
+
+```bash
+# Clone repository
+git clone https://github.com/your-username/your-repo.git
+cd your-repo
+
+# Build Docker image
+docker build --build-arg ENVIRONMENT=development -t php-app:dev .
+
+# Run container
+docker run -d -p 80:80 --name php-app-dev php-app:dev
+
+# View logs
+docker logs -f php-app-dev
+
+# Access application
+open http://localhost
+```
+
+---
+
+## 📝 License
+
+This project is licensed under the MIT License.
+
+---
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+---
+
+## 📧 Contact
+
+For questions or support, please open an issue in this repository.
