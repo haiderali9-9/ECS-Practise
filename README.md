@@ -160,29 +160,44 @@ phases:
   pre_build:
     commands:
       - echo Logging in to Amazon ECR...
-      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
-      - REPOSITORY_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME
+      - aws ecr get-login-password --region ap-southeast-2 | docker login --username AWS --password-stdin 348375262156.dkr.ecr.ap-southeast-2.amazonaws.com
+      - REPOSITORY_URI=348375262156.dkr.ecr.ap-southeast-2.amazonaws.com/ecs-practise-phpapp
       - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
-      - IMAGE_TAG=${COMMIT_HASH:=latest}
+      - IMAGE_TAG=$COMMIT_HASH
   
   build:
     commands:
       - echo Build started on `date`
-      - echo Building the Docker image...
-      - docker build --build-arg ENVIRONMENT=production -t $REPOSITORY_URI:latest .
-      - docker tag $REPOSITORY_URI:latest $REPOSITORY_URI:$IMAGE_TAG
+      - echo Building the Docker image with environment $ENVIRONMENT...
+      - docker build --build-arg ENVIRONMENT=$ENVIRONMENT -t ecs-practise-phpapp:$IMAGE_TAG .
   
   post_build:
     commands:
       - echo Build completed on `date`
-      - echo Pushing the Docker images...
-      - docker push $REPOSITORY_URI:latest
+      - echo Tagging and pushing the Docker image...
+      - docker tag ecs-practise-phpapp:$IMAGE_TAG $REPOSITORY_URI:$IMAGE_TAG
       - docker push $REPOSITORY_URI:$IMAGE_TAG
-      - echo Writing image definitions file...
-      - printf '[{"name":"php-app","imageUri":"%s"}]' $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
 
-artifacts:
-  files: imagedefinitions.json
+      - echo Updating task definition...
+      - TASK_DEF_FILE="$CODEBUILD_SRC_DIR/etc/development/task.json"
+      - IMAGE="$REPOSITORY_URI:$IMAGE_TAG"
+      - jq --arg IMAGE "$IMAGE" \
+        '(.containerDefinitions[] | select(.name=="ecs-practise-php-app") ).image = $IMAGE' \
+        $TASK_DEF_FILE > tmp.json && mv tmp.json $TASK_DEF_FILE
+      - cat $TASK_DEF_FILE
+      
+     
+      - echo Registering new task definition...
+      - aws ecs register-task-definition --cli-input-json file://$TASK_DEF_FILE --region ap-southeast-2
+      
+      
+      - TASK_DEFINITION=$(aws ecs describe-task-definition --task-definition ECS-Practise-App --region ap-southeast-2 --query 'taskDefinition.taskDefinitionArn' --output text)
+      - echo New task definition $TASK_DEFINITION registered
+      
+      
+      - echo Updating ECS service...
+      - aws ecs update-service --cluster ecs-practise-cluster --service ECS-Practise-App-service-y3e4zhlt --task-definition ECS-Practise-App --force-new-deployment --region ap-southeast-2
+      - echo Service updated successfully
 ```
 
 ---
