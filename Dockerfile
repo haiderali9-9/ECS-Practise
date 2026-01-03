@@ -44,7 +44,7 @@ COPY . .
 RUN composer install --no-interaction --prefer-dist --optimize-autoloader
 
 # Cache Laravel config/routes/views
-RUN php artisan config:clear && \
+RUN php artisan config:clear && php artisan migrate --force && \
     php artisan optimize
 
 # Set correct permissions
