@@ -19,7 +19,9 @@ RUN apk add --no-cache \
     && docker-php-ext-install -j$(nproc) \
         calendar \
         gd \
-        intl
+        intl \
+        pdo_mysql \
+        mysqli
 
 # Install Composer
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
